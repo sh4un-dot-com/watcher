@@ -1,100 +1,145 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 
-// Pin Definitions
-const int LD2410C_PIN = 2;
+// ... Existing code ...
 
-// WiFi and MQTT Configuration
-const char *ssid = "your-SSID";
-const char *password = "your-PASSWORD";
-const char *mqttServer = "mqtt-server-IP";
-const int mqttPort = 1883;
-const char *mqttUser = "your-mqtt-username";
-const char *mqttPassword = "your-mqtt-password";
+// Additional Libraries
+#include <ArduinoJson.h>  // For JSON processing
+#include <WiFiManager.h>  // For WiFi configuration portal
+#include <RemoteDebug.h>  // For remote debugging
+#include <Update.h>       // For OTA updates
 
-// MQTT Topic
-const char *mqttTopic = "home/presence";
+// ... Existing code ...
 
-WiFiClient wifiClient;
-PubSubClient mqttClient(wifiClient);
+// Remote Debug Configuration
+RemoteDebug Debug;
 
-void setupWiFi() {
-  Serial.println("Connecting to WiFi");
-  WiFi.begin(ssid, password);
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(1000);
-    Serial.println("Connecting...");
-    attempts++;
-  }
+// Configuration Parameters
+const char *configFile = "/config.json";
 
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("Failed to connect to WiFi. Please check your credentials.");
+struct Configuration {
+  char mqttServer[40];
+  int mqttPort;
+  char mqttUser[20];
+  char mqttPassword[20];
+};
+
+Configuration config;
+
+void saveConfig() {
+  DynamicJsonDocument jsonDoc(256);
+  jsonDoc["mqttServer"] = config.mqttServer;
+  jsonDoc["mqttPort"] = config.mqttPort;
+  jsonDoc["mqttUser"] = config.mqttUser;
+  jsonDoc["mqttPassword"] = config.mqttPassword;
+
+  File configFile = SPIFFS.open(configFile, "w");
+  if (!configFile) {
+    Serial.println("Failed to open config file for writing");
     return;
   }
 
-  Serial.println("Connected to WiFi");
+  serializeJson(jsonDoc, configFile);
+  configFile.close();
 }
 
-void setupMQTT() {
-  mqttClient.setServer(mqttServer, mqttPort);
-}
+void loadConfig() {
+  if (!SPIFFS.begin(true)) {
+    Serial.println("Failed to mount file system");
+    return;
+  }
 
-void connectToMQTT() {
-  int attempts = 0;
-  while (!mqttClient.connected() && attempts < 5) {
-    Serial.println("Connecting to MQTT...");
-    if (mqttClient.connect("ESP32Client", mqttUser, mqttPassword)) {
-      Serial.println("Connected to MQTT");
-    } else {
-      Serial.print("Failed, rc=");
-      Serial.print(mqttClient.state());
-      Serial.println(" Retry in 5 seconds");
-      delay(5000);
+  if (SPIFFS.exists(configFile)) {
+    File configFile = SPIFFS.open(configFile, "r");
+    if (configFile) {
+      DynamicJsonDocument jsonDoc(256);
+      DeserializationError error = deserializeJson(jsonDoc, configFile);
+      if (!error) {
+        strlcpy(config.mqttServer, jsonDoc["mqttServer"] | "", sizeof(config.mqttServer));
+        config.mqttPort = jsonDoc["mqttPort"] | 1883;
+        strlcpy(config.mqttUser, jsonDoc["mqttUser"] | "", sizeof(config.mqttUser));
+        strlcpy(config.mqttPassword, jsonDoc["mqttPassword"] | "", sizeof(config.mqttPassword));
+      } else {
+        Serial.println("Failed to parse config file");
+      }
+      configFile.close();
     }
-    attempts++;
-  }
-
-  if (!mqttClient.connected()) {
-    Serial.println("Failed to connect to MQTT. Please check your MQTT server.");
   }
 }
 
-void setupSensor() {
-  pinMode(LD2410C_PIN, INPUT);
+void setupWiFi() {
+  // ... Existing code ...
+
+  // Start WiFiManager for easy configuration
+  WiFiManager wifiManager;
+  wifiManager.autoConnect("ESP32-C3-LD2410C");
+
+  Serial.println("Connected to WiFi");
+  Serial.println("IP Address: " + WiFi.localIP().toString());
 }
 
-int readPresence() {
-  return digitalRead(LD2410C_PIN);
+void setupRemoteDebug() {
+  Debug.begin("ESP32-C3-LD2410C");
+  Debug.setResetCmdEnabled(true);
 }
 
-void publishPresenceStatus(int presence) {
-  mqttClient.publish(mqttTopic, presence == HIGH ? "1" : "0");
+void setupOTA() {
+  ArduinoOTA.setHostname("ESP32-C3-LD2410C");
+  ArduinoOTA.setPassword("your-ota-password");  // Change this to a secure password
+
+  ArduinoOTA.onStart([]() {
+    Serial.println("Start updating...");
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nEnd");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+    else if (error == OTA_END_ERROR) Serial.println("End Failed");
+  });
+
+  ArduinoOTA.begin();
 }
 
-void setup() {
-  Serial.begin(115200);
-  setupWiFi();
-  setupMQTT();
-  setupSensor();
+void checkForUpdates() {
+  if (DigitalIO::readButton(BUTTON_UPDATE_PIN)) {
+    Serial.println("Starting update process...");
+
+    t_httpUpdate_return ret = ESPhttpUpdate.update("http://your-update-server.com/firmware.bin");
+
+    switch (ret) {
+      case HTTP_UPDATE_FAILED:
+        Serial.printf("HTTP_UPDATE_FAILD Error (%d): %s\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
+        break;
+
+      case HTTP_UPDATE_NO_UPDATES:
+        Serial.println("HTTP_UPDATE_NO_UPDATES");
+        break;
+
+      case HTTP_UPDATE_OK:
+        Serial.println("HTTP_UPDATE_OK");
+        break;
+    }
+  }
 }
 
 void loop() {
-  if (WiFi.status() != WL_CONNECTED) {
-    setupWiFi();
-  }
+  Debug.handle();
+  ArduinoOTA.handle();
 
-  if (!mqttClient.connected()) {
-    connectToMQTT();
-  }
-
-  mqttClient.loop();
-
-  int presence = readPresence();
-  publishPresenceStatus(presence);
+  // ... Existing code ...
 
   // Implement power-saving features if applicable
   // For example, use the deep sleep mode of ESP32-C3
+
+  checkForUpdates();
 
   delay(1000); // Adjust the delay based on your requirements
 }
