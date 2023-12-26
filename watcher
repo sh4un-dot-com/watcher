@@ -1,7 +1,19 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 
-// ... Constants and configurations ...
+// Pin Definitions
+const int LD2410C_PIN = 2;
+
+// WiFi and MQTT Configuration
+const char *ssid = "your-SSID";
+const char *password = "your-PASSWORD";
+const char *mqttServer = "mqtt-server-IP";
+const int mqttPort = 1883;
+const char *mqttUser = "your-mqtt-username";
+const char *mqttPassword = "your-mqtt-password";
+
+// MQTT Topic
+const char *mqttTopic = "home/presence";
 
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
@@ -24,6 +36,10 @@ void setupWiFi() {
   Serial.println("Connected to WiFi");
 }
 
+void setupMQTT() {
+  mqttClient.setServer(mqttServer, mqttPort);
+}
+
 void connectToMQTT() {
   int attempts = 0;
   while (!mqttClient.connected() && attempts < 5) {
@@ -44,10 +60,29 @@ void connectToMQTT() {
   }
 }
 
-// ... Other functions ...
+void setupSensor() {
+  pinMode(LD2410C_PIN, INPUT);
+}
+
+int readPresence() {
+  return digitalRead(LD2410C_PIN);
+}
+
+void publishPresenceStatus(int presence) {
+  mqttClient.publish(mqttTopic, presence == HIGH ? "1" : "0");
+}
+
+void setup() {
+  Serial.begin(115200);
+  setupWiFi();
+  setupMQTT();
+  setupSensor();
+}
 
 void loop() {
-  setupWiFi();
+  if (WiFi.status() != WL_CONNECTED) {
+    setupWiFi();
+  }
 
   if (!mqttClient.connected()) {
     connectToMQTT();
@@ -57,6 +92,9 @@ void loop() {
 
   int presence = readPresence();
   publishPresenceStatus(presence);
+
+  // Implement power-saving features if applicable
+  // For example, use the deep sleep mode of ESP32-C3
 
   delay(1000); // Adjust the delay based on your requirements
 }
